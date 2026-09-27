@@ -23,6 +23,7 @@ interface Props {
 }
 
 const AXIS_VECS: Vector3[] = [new Vector3(1, 0, 0), new Vector3(0, 1, 0), new Vector3(0, 0, 1)];
+const tmpVec = new Vector3();
 const MOVE_SECONDS = 0.36;
 
 // Ease-out with a small overshoot — layer turns settle with a physical "snap".
@@ -39,7 +40,7 @@ const DIR_VEC: Record<DirKey, V3> = {
 };
 
 interface CubieSim { pos: V3; quat: Quaternion }
-interface Anim { m: ParsedMove; t: number; starts: Map<number, Quaternion> }
+interface Anim { m: ParsedMove; t: number; starts: Map<number, CubieSim> }
 
 interface SceneRefs {
   sim: MutableRefObject<Map<number, CubieSim>>;
@@ -62,9 +63,11 @@ function Animator({ refs }: { refs: SceneRefs }) {
 
     if (!anim.current && queue.current.length > 0) {
       const m = queue.current.shift()!;
-      const starts = new Map<number, Quaternion>();
+      const starts = new Map<number, CubieSim>();
       for (const [id, s] of sim.current) {
-        if (s.pos[m.axis] === m.layer) starts.set(id, s.quat.clone());
+        if (s.pos[m.axis] === m.layer) {
+          starts.set(id, { pos: [...s.pos] as V3, quat: s.quat.clone() });
+        }
       }
       anim.current = { m, t: 0, starts };
     }
@@ -76,15 +79,18 @@ function Animator({ refs }: { refs: SceneRefs }) {
     const qd = new Quaternion().setFromAxisAngle(AXIS_VECS[a.m.axis], (a.m.turns * Math.PI) / 2 * e);
     for (const [id, start] of a.starts) {
       const mesh = meshes.current.get(id);
-      if (mesh) mesh.quaternion.copy(qd).multiply(start);
+      if (!mesh) continue;
+      // The whole layer orbits the turn axis: position AND orientation rotate together.
+      mesh.quaternion.copy(qd).multiply(start.quat);
+      mesh.position.copy(tmpVec.set(...start.pos)).applyQuaternion(qd);
     }
     if (a.t >= 1) {
       const full = new Quaternion().setFromAxisAngle(AXIS_VECS[a.m.axis], (a.m.turns * Math.PI) / 2);
       for (const [id, start] of a.starts) {
         const s = sim.current.get(id)!;
         const mesh = meshes.current.get(id)!;
-        s.quat.copy(full).multiply(start);
-        s.pos = rotVecK(s.pos, a.m.axis, a.m.turns);
+        s.quat.copy(full).multiply(start.quat);
+        s.pos = rotVecK(start.pos, a.m.axis, a.m.turns);
         mesh.position.set(...s.pos);
         mesh.quaternion.copy(s.quat);
       }
